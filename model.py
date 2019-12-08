@@ -136,21 +136,35 @@ class Discriminator(nn.Module):
 
 
     """Adversary architecture(Discriminator) for WAE-GAN."""
-    def __init__(self, z_dim=8):
+    def __init__(self, z_dim=8, multi_class=True):
         super(Discriminator, self).__init__()
         self.z_dim = z_dim
-        self.net = nn.Sequential(
-            nn.Linear(z_dim, 32),
-            nn.ReLU(True),
-            nn.Linear(32, 32),
-            # nn.ReLU(True),
-            # nn.Linear(128, 128),
-            # nn.ReLU(True),
-            # nn.Linear(128, 128),
-            nn.ReLU(True),
-            nn.Linear(32, 5),
-            nn.Sigmoid()
-        )
+        if multi_class:
+            self.net = nn.Sequential(
+                nn.Linear(z_dim, 32),
+                nn.ReLU(True),
+                nn.Linear(32, 32),
+                # nn.ReLU(True),
+                # nn.Linear(128, 128),
+                # nn.ReLU(True),
+                # nn.Linear(128, 128),
+                nn.ReLU(True),
+                nn.Linear(32, 5),
+                nn.Softmax()
+            )
+        else:
+            self.net = nn.Sequential(
+                nn.Linear(z_dim, 32),
+                nn.ReLU(True),
+                nn.Linear(32, 32),
+                # nn.ReLU(True),
+                # nn.Linear(128, 128),
+                # nn.ReLU(True),
+                # nn.Linear(128, 128),
+                nn.ReLU(True),
+                nn.Linear(32, 1),
+                nn.Sigmoid()
+            )
         self.weight_init()
 
 
@@ -189,6 +203,29 @@ class FCNet(nn.Module):
     
     def forward(self, z):
         return self.net(z)
+
+"""
+For RL learning
+"""
+class RnnNet(nn.Module):
+    def __init__(self, input_shape, rnn_hidden_dim):
+        super(RnnNet, self).__init__()
+        self.rnn_hidden_dim = rnn_hidden_dim
+
+        self.fc1 = nn.Linear(input_shape, rnn_hidden_dim)
+        self.rnn = nn.GRUCell(rnn_hidden_dim, rnn_hidden_dim)
+        self.fc2 = nn.Linear(rnn_hidden_dim, 1)
+    
+    def init_hidden(self):
+        # make hidden states on same device as model
+        return self.fc1.weight.new(1, self.rnn_hidden_dim).zero_()
+
+    def forward(self, inputs, hidden_state):
+        x = F.relu(self.fc1(inputs))
+        h_in = hidden_state.reshape(-1, self.rnn_hidden_dim)
+        h = self.rnn(x, h_in)
+        q = self.fc2(h)
+        return q, h
 
 
 def kaiming_init(m):

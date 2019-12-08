@@ -2,6 +2,17 @@ import torch
 import random
 import numpy as np
 
+class TopSampler:
+    def __init__(self, budget):
+        self.budget = budget
+    
+    def sample(self, all_preds, all_indices):
+        _, querry_indices = torch.topk(all_preds, int(self.budget))
+        querry_indices = querry_indices.cpu().numpy()
+        querry_pool_indices = np.asarray(all_indices)[querry_indices]
+
+        return querry_pool_indices
+
 class UncertaintySampler:
     def __init__(self, budget):
         self.budget = budget

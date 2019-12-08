@@ -16,6 +16,13 @@ def get_args():
     parser.add_argument('--out_path', type=str, default='./results', help='Path to where the output log will be')
     parser.add_argument('--log_name', type=str, default='accuracies.log', help='Final performance of the models will be saved with this name')
     parser.add_argument('--sampling_method', type=str, default='random', help='Sampling method for selecting data to be added to training set')
+    parser.add_argument('--is_multi_class', type=bool, default=True, help='Boolean value that determines if the discriminator uses multi class info')
+    #RL parameters
+    parser.add_argument('--lr', type=float, default=0.0005, help='learning rate for RMSProp')
+    parser.add_argument('--optim_alpha', type=float, default=0.99, help='alpha for RMSProp')
+    parser.add_argument('--optim_eps', type=float, default=0.00001, help='eps for RMSProp')
+    
+
     args = parser.parse_args()
 
     if not os.path.exists(args.out_path):

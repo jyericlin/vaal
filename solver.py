@@ -11,6 +11,39 @@ import sampler
 from tqdm import tqdm
 
 
+class ReplayBuffer():
+    def __init__(self):
+        self.episode_data = {}
+
+    def can_sample(self, batch_size):
+        return self.episodes_in_buffer >= batch_size
+
+    #TODO implement
+    def insert_episode(self, episode):
+        pass
+
+    def sample(self, batch_size):
+        assert self.can_sample(batch_size)
+        if self.episodes_in_buffer == batch_size:
+            return self[:batch_size]
+        else:
+            # Uniform sampling only atm
+            ep_ids = np.random.choice(self.episodes_in_buffer, batch_size, replace=False)
+            return self[ep_ids]
+
+    #TODO implement
+    def __getitem__(self, item):
+        print("in __getitem__")
+        print(item)
+
+
+class RLLearner():
+    def __init__(self):
+        pass
+    
+    def train(self, episode_batch):
+        pass
+
 
 
 class Solver:
@@ -21,6 +54,8 @@ class Solver:
         self.bce_loss = nn.BCELoss()
         self.mse_loss = nn.MSELoss()
         self.ce_loss = nn.CrossEntropyLoss()
+
+        self.is_multi_class = args.is_multi_class
 
         self.sampling_method = args.sampling_method
         if self.sampling_method == "random":
@@ -45,6 +80,38 @@ class Solver:
             while True:
                 for img, _, _ in dataloader:
                     yield img
+
+    def controller(self,):
+        pass
+
+    def run_episode(self, controller, querry_dataloader, unlabeled_dataloader, task_model, test_mode=False):
+        pass
+    
+
+    def run(self, num_runs, replay_buffer, learner, controller, batch_size):
+        for i in num_runs:
+            episode = self.run_episode(controller)
+            replay_buffer.insert_episode(episode)
+
+            if replay_buffer.can_sample(batch_size):
+                episode_sample = replay_buffer.sample(batch_size)
+                #check if CUDA exist here
+                episode_sample.cuda()
+
+                learner.train(episode_sample)
+
+            eval_interval = 30
+            if i%eval_interval == 0:
+                self.run_episode(controller, test_mode=True)
+            #TODO save RL model here
+
+
+            
+
+    def train_RL_without_adv_vae(self, querry_dataloader, task_model, unlabeled_dataloader):
+
+        final_acc = self.train_without_adv_vae(querry_dataloader, task_model, None, None, unlabeled_dataloader)
+
 
 
     def train_without_adv_vae(self, querry_dataloader, task_model, vae, discriminator, unlabeled_dataloader):
@@ -147,8 +214,13 @@ class Solver:
                 labeled_preds = discriminator(mu)
                 unlabeled_preds = discriminator(unlab_mu)
                 
-                lab_real_preds = torch.zeros(labeled_imgs.size(0)).long()
-                unlab_real_preds = torch.zeros(unlabeled_imgs.size(0)).long()
+                if self.is_multi_class:
+                    lab_real_preds = torch.zeros(labeled_imgs.size(0)).long()
+                    unlab_real_preds = torch.zeros(unlabeled_imgs.size(0)).long()
+                else:
+                    lab_real_preds = torch.ones(labeled_imgs.size(0))
+                    unlab_real_preds = torch.ones(unlabeled_imgs.size(0))
+
                     
                 if self.args.cuda:
                     lab_real_preds = lab_real_preds.cuda()
@@ -182,8 +254,13 @@ class Solver:
                 unlabeled_preds = discriminator(unlab_mu)
                 # unlabeled_preds = unlabeled_out.max(1)[1]
                 
-                lab_real_preds = labels
-                unlab_fake_preds = torch.zeros(unlabeled_imgs.size(0)).long()
+                if self.is_multi_class:
+                    lab_real_preds = labels
+                    unlab_fake_preds = torch.zeros(unlabeled_imgs.size(0)).long()
+                else:
+                    lab_real_preds = torch.ones(labeled_imgs.size(0))
+                    unlab_fake_preds = torch.zeros(unlabeled_imgs.size(0))
+
 
                 if self.args.cuda:
                     lab_real_preds = lab_real_preds.cuda()

@@ -1,16 +1,21 @@
 import torch
 import random
 import numpy as np
+import logging
 
 class TopSampler:
     def __init__(self, budget):
         self.budget = budget
     
+    @property
+    def logger(self):
+        return logging.getLogger(TopSampler.__name__)
+
     def sample(self, all_preds, all_indices):
         _, querry_indices = torch.topk(all_preds, int(self.budget))
         querry_indices = querry_indices.cpu().numpy()
+        self.logger.debug("sample index of curr order: %s" % querry_indices)
         querry_pool_indices = np.asarray(all_indices)[querry_indices]
-
         return querry_pool_indices
 
 class UncertaintySampler:

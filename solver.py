@@ -128,7 +128,7 @@ class Solver:
         
         change_lr_iter = self.args.train_iterations // 25
 
-        for iter_count in tqdm(range(self.args.train_iterations)):
+        for iter_count in range(self.args.train_iterations):
             if iter_count is not 0 and iter_count % change_lr_iter == 0:
     
                 for param in optim_task_model.param_groups:

@@ -21,6 +21,9 @@ def get_args():
     parser.add_argument('--lr', type=float, default=0.0005, help='learning rate for RMSProp')
     parser.add_argument('--optim_alpha', type=float, default=0.99, help='alpha for RMSProp')
     parser.add_argument('--optim_eps', type=float, default=0.00001, help='eps for RMSProp')
+    parser.add_argument('--gamma', type=float, default=0.99, help='gamma for discounting reward')
+    parser.add_argument('--grad_norm_clip', type=float, default=10, help='Reduce magnitude of gradients above this L2 norm')
+    parser.add_argument('--epsilon', type=float, default=0.3, help='epsilon for exploration in RL')
     
 
     args = parser.parse_args()

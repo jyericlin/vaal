@@ -21,7 +21,7 @@ import copy
 from torch.distributions import Categorical
 
 import coloredlogs, logging
-coloredlogs.install(level='INFO')
+coloredlogs.install(level='DEBUG')
 
 
 
@@ -46,14 +46,26 @@ class ReplayBuffer():
     def episodes_in_buffer(self):
         return len(self.rb_data)
 
-    def sample(self, batch_size):
+    def sample(self, batch_size, cuda):
         assert self.can_sample(batch_size)
         if self.episodes_in_buffer == batch_size:
-            return self[:batch_size]
+            result = self[:batch_size]
+            if cuda:
+                result = self.tocuda(result)
+            return result
         else:
             # Uniform sampling only atm
             ep_ids = np.random.choice(self.episodes_in_buffer, batch_size, replace=False)
-            return self[ep_ids]
+            result = self[ep_ids]
+            if cuda:
+                result = self.tocuda(result)
+            return result
+
+    def tocuda(self, batch):
+        for key in batch:
+            if type(batch[key]) == torch.Tensor:
+                batch[key] = batch[key].cuda()
+        return batch
 
     def get_formatted_data(self, preproc_data, data_type, format_as_tensor=True):
         output_list = []
@@ -80,8 +92,10 @@ class ReplayBuffer():
         output = {'reward': self.get_formatted_data(preproc_data, 'reward'), 
                 'actions': self.get_formatted_data(preproc_data, 'action'),
                 'state': self.get_formatted_data(preproc_data, 'state', format_as_tensor=False),
+                'predictions': self.get_formatted_data(preproc_data, 'predictions', format_as_tensor=False),
                 'batch_size': len(preproc_data),
-                'sequence_num': self.get_sequence_num(preproc_data)}
+                'sequence_num': self.get_sequence_num(preproc_data),
+                'episode_num': len(self.rb_data)}
         return output
 
     def __getitem__(self, item):
@@ -236,30 +250,28 @@ class RLLearner():
         grad_norm = torch.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
         self.optimiser.step()
 
-        #TODO remove this
-        return
-        #end todo
+        
 
-        if (episode_num - self.last_target_update_episode) / self.args.target_update_interval >= 1.0:
+        if (episode_batch['episode_num'] - self.last_target_update_episode) / self.args.target_update_interval >= 1.0:
             self._update_targets()
-            self.last_target_update_episode = episode_num
+            self.last_target_update_episode = episode_batch['episode_num']
 
-        if t_env - self.log_stats_t >= self.args.learner_log_interval:
-            print("loss", loss.item(), t_env)
-            print("grad_norm", grad_norm, t_env)
+        # if t_env - self.log_stats_t >= self.args.learner_log_interval:
+        #     print("loss", loss.item(), t_env)
+        #     print("grad_norm", grad_norm, t_env)
             
-            print("td_error_abs", (masked_td_error.abs().sum().item()/mask_elems), t_env)
-            print("q_taken_mean", (chosen_action_qvals * mask).sum().item()/(mask_elems * self.args.n_agents), t_env)
-            print("target_mean", (targets * mask).sum().item()/(mask_elems * self.args.n_agents), t_env)
-            self.log_stats_t = t_env
+        #     print("td_error_abs", (masked_td_error.abs().sum().item()/mask_elems), t_env)
+        #     print("q_taken_mean", (chosen_action_qvals * mask).sum().item()/(mask_elems * self.args.n_agents), t_env)
+        #     print("target_mean", (targets * mask).sum().item()/(mask_elems * self.args.n_agents), t_env)
+        #     self.log_stats_t = t_env
 
     def _update_targets(self):
-        self.target_q_net.load_state(self.q_net)
-        print("Updated target network")
+        self.target_rlc.load_state(self.rlc)
+        logging.info("Updated target network")
 
-    def cuda(self):
-        self.rlc.cuda()
-        self.target_q_net.cuda()
+    # def cuda(self):
+    #     self.rlc.cuda()
+    #     self.target_q_net.cuda()
 
     def save_models(self, path):
         self.rlc.save_models(path)
@@ -268,7 +280,7 @@ class RLLearner():
     def load_models(self, path):
         self.rlc.load_models(path)
         # Not quite right but I don't want to save target networks
-        self.target_q_net.load_models(path)
+        self.target_rlc.load_models(path)
     
         self.optimiser.load_state_dict(torch.load("{}/opt.th".format(path), map_location=lambda storage, loc: storage))
 
@@ -294,24 +306,36 @@ class RLController():
         for episode_idx in range(len(episode_batch['state'])):
 
             unlabeled_indices = episode_batch['state'][episode_idx][t]
+            predictions = episode_batch['predictions'][episode_idx][t]
+            # print("########################")
+            # print("t: %s" % t)
+            # print(unlabeled_indices)
+            # print(predictions)
 
-            unlabeled_sampler = data.sampler.SubsetRandomSampler(unlabeled_indices.data.numpy())
-
-            unlabeled_dataloader_rl = data.DataLoader(self.train_dataset, 
-                    sampler=unlabeled_sampler, batch_size=1, drop_last=False)
+            unlabeled_data_subset = data.Subset(self.train_dataset, unlabeled_indices.data.numpy())
+            unlabeled_dataloader_rl = data.DataLoader(unlabeled_data_subset, 
+                    batch_size=1, drop_last=False)
 
             all_q = []
             all_indices = []
+            i = 0
             for images, _, indices in unlabeled_dataloader_rl:
-                if self.args.cuda:
-                    images = images.cuda()
-
                 
+                # print(images)
+                # print(predictions[i].view(1, -1))
+                input_features = torch.cat([images, predictions[i].view(1, -1)], dim=1)
+                # print("@@@@@")
+                # print(input_features)
+
+                if self.args.cuda:
+                    input_features = input_features.cuda()
+
                 #TODO add other features to the network
-                q, _ = self.q_net(images, self.rnn_hidden_state[episode_idx])
+                q, _ = self.q_net(input_features, self.rnn_hidden_state[episode_idx])
 
                 all_q.extend(q)
                 all_indices.extend(indices)
+                i += 1
 
             all_q = torch.stack(all_q)
             all_q = all_q.view(-1)
@@ -320,6 +344,7 @@ class RLController():
             output_q.append(all_q)
             output_i.append(torch.tensor(all_indices))
             
+        # print(output_q)
         output_q = torch.stack(output_q)
         output_i = torch.stack(output_i)
         
@@ -345,26 +370,27 @@ class RLController():
 
             # Action selection
             if pick_random == 1:
-                random_action_i_idx = Categorical(batch_is.float()).sample().long()
-                sampled_indices = all_indices[random_action_i_idx].data.numpy()
+                action_i_idx = Categorical(batch_is.float()).sample().long()
+                sampled_indices = all_indices[action_i_idx].data.numpy()
                 self.logger.debug("sampled random indices (ori dataset order): %s" % sampled_indices)
-                print(type(sampled_indices))
             else:
                 sampler_on_q = custom_sampler.TopSampler(self.args.budget)
-                sampled_indices = sampler_on_q.sample(all_q, all_indices)
+                sampled_indices, action_i_idx = sampler_on_q.sample(all_q, all_indices)
                 self.logger.debug("sampled indices (original dataset order): %s" % sampled_indices)
-                print(type(sampled_indices))
             best_q = None
             
+            self.logger.debug("Sample indices selected: %s" % sampled_indices)
             temp_sampler = data.sampler.SubsetRandomSampler(list(sampled_indices))
             best_q_image_dataloader = data.DataLoader(self.train_dataset, sampler=temp_sampler, 
                     batch_size=self.args.batch_size, drop_last=False)
             for images, _, indices in best_q_image_dataloader:
                 # self.logger.debug("image: %s" % str(images))
+                input_features = torch.cat([images, episode_batch['predictions'][i][t][action_i_idx].view(1, -1)], dim=1)
+                self.logger.debug("input feature before last pass: %s" % input_features)
                 if self.args.cuda:
-                    images = images.cuda()
+                    input_features = input_features.cuda()
                 self.logger.debug("hidden state before update: %s" % self.rnn_hidden_state)
-                best_q, self.rnn_hidden_state[i] = self.q_net(images, self.rnn_hidden_state[[i]])
+                best_q, self.rnn_hidden_state[i] = self.q_net(input_features, self.rnn_hidden_state[[i]])
                 self.logger.debug("hidden state after update: %s" % self.rnn_hidden_state)
                 self.logger.debug("best q: %s" % best_q)
             
@@ -376,8 +402,16 @@ class RLController():
     def parameters(self):
         return self.q_net.parameters()
 
+    def save_models(self, path):
+        torch.save(self.q_net.state_dict(), "{}/agent.th".format(path))
 
-def take_step(all_indices, current_indices, train_dataset, querry_dataloader, solver):
+    def load_models(self, path):
+        self.q_net.load_state_dict(torch.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
+
+    def load_state(self, other_mac):
+        self.q_net.load_state_dict(other_mac.q_net.state_dict())
+
+def take_step(all_indices, current_indices, train_dataset, querry_dataloader, solver, args):
     task_model = model.FCNet(num_classes=args.num_classes)
     if args.dataset == "mnist":
         vae = model.VAE(args.latent_dim, nc=1)
@@ -402,12 +436,25 @@ def take_step(all_indices, current_indices, train_dataset, querry_dataloader, so
                                             unlabeled_dataloader)
     else:
         # train the models on the current data
-        acc, vae, discriminator = solver.train_without_adv_vae(querry_dataloader,
+        acc, vae, discriminator, task_model = solver.train_without_adv_vae(querry_dataloader,
                                             task_model, 
                                             vae, 
                                             discriminator,
                                             unlabeled_dataloader)
-    return acc, unlabeled_indices
+
+    
+    unlabelled_data_subset = data.Subset(train_dataset, unlabeled_indices)
+    sequential_unlabeled_dataloader = data.DataLoader(unlabelled_data_subset, 
+            batch_size=args.batch_size, drop_last=False)
+    uncertainty_sampler = custom_sampler.UncertaintySampler(-1) # not sampling here, just getting the prediction
+    predictions, unlabeled_indices_new = uncertainty_sampler.getOutputProbAllClasses(task_model, sequential_unlabeled_dataloader, args.cuda)
+
+    # print("########################################################################")
+    # print(unlabeled_indices)
+    # print(unlabeled_indices_new)
+
+
+    return acc, unlabeled_indices_new, predictions
 
 def run_episode(args, initial_indices, all_indices, train_dataset, solver, q_net, rlc, test_mode=False):
     sampler = data.sampler.SubsetRandomSampler(initial_indices)
@@ -419,12 +466,11 @@ def run_episode(args, initial_indices, all_indices, train_dataset, solver, q_net
     #TODO change batch size to be configurable, maybe we can use it speed up the roll out as well
     rlc.init_hidden(1)
 
-    splits = [args.initial_budget,
-        (args.initial_budget+args.budget), 
-        (args.initial_budget+args.budget*2), 
-        (args.initial_budget+args.budget*3), 
-        (args.initial_budget+args.budget*4), 
-        (args.initial_budget+args.budget*5)]
+    number_of_sample_runs = 10
+
+    splits = []
+    for i in range(number_of_sample_runs):
+        splits.append(args.initial_budget + i*args.budget)
 
     episode_info = []
 
@@ -439,10 +485,15 @@ def run_episode(args, initial_indices, all_indices, train_dataset, solver, q_net
 
         logging.debug("RNN hidden input: %s" % str(rlc.rnn_hidden_state))
         
-        acc, unlabeled_indices = take_step(all_indices, current_indices, train_dataset, querry_dataloader, solver)
-        logging.info('Final accuracy with {}% of data is: {:.2f}'.format(int(split*100), acc))
+        acc, unlabeled_indices, predictions = take_step(all_indices, current_indices, train_dataset, querry_dataloader, solver, args)
+        logging.info('Final accuracy with {} sample of data is: {:.2f}'.format(int(split), acc))
         logging.debug("unlabelled indices: %s" % unlabeled_indices)
+        logging.debug("predictions of the unlablled indices: %s" % predictions)
         
+        best_pred = predictions.max(1)[0].view(-1, 1)
+        predictions = torch.cat([predictions, best_pred], dim=1)
+        logging.debug("predictions with best selection: %s" % predictions)
+
         if len(accuracies) > 0:
             reward_for_last_step = acc - accuracies[-1]
             episode_info[-1]['reward'] = torch.tensor([reward_for_last_step/100.0])
@@ -450,13 +501,14 @@ def run_episode(args, initial_indices, all_indices, train_dataset, solver, q_net
         accuracies.append(acc)
 
         #reward is caculated in the next iteration of the loop
-        step_execution_data = {'state': torch.tensor(unlabeled_indices), 'accurcy': torch.tensor([acc]), 't':t, 'reward': None}
+        step_execution_data = {'state': torch.tensor(unlabeled_indices), 'predictions': torch.tensor(predictions), 'accurcy': torch.tensor([acc]), 't':t, 'reward': None}
         
         batch_execution_data = copy.copy(step_execution_data)
         batch_execution_data['state'] = batch_execution_data['state'].view(1, 1, -1)
+        batch_execution_data['predictions'] = batch_execution_data['predictions'].view(1, 1, batch_execution_data['predictions'].size()[0], batch_execution_data['predictions'].size()[1])
 
 
-        sampled_indices, best_q = rlc.select_actions(batch_execution_data, 0)
+        sampled_indices, best_q = rlc.select_actions(batch_execution_data, 0, test_mode=test_mode)
 
         step_execution_data['action'] = torch.tensor(sampled_indices[0])
         episode_info.append(step_execution_data)
@@ -470,7 +522,7 @@ def run_episode(args, initial_indices, all_indices, train_dataset, solver, q_net
                 batch_size=args.batch_size, drop_last=False)
 
     #Take the last step to get reward
-    acc, unlabeled_indices = take_step(all_indices, current_indices, train_dataset, querry_dataloader, solver)
+    acc, unlabeled_indices, predictions = take_step(all_indices, current_indices, train_dataset, querry_dataloader, solver, args)
     if len(accuracies) > 0:
         reward_for_last_step = acc - accuracies[-1]
         episode_info[-1]['reward'] = torch.tensor([reward_for_last_step])
@@ -545,13 +597,11 @@ def main(args):
     random.seed("csc2547")
 
     all_indices = set(np.arange(args.num_images))
-    initial_indices = random.sample(all_indices, args.initial_budget)
     
-            
     args.cuda = args.cuda and torch.cuda.is_available()
     solver = Solver(args, test_dataloader)
 
-    q_net = model.RnnNet(2, 3)
+    q_net = model.RnnNet(8, 3)
     if args.cuda:
         q_net.cuda()
 
@@ -561,9 +611,12 @@ def main(args):
     rl_learner = RLLearner(rlc, args)
 
 
-    num_runs = 100
-    batch_size = 16
+    num_runs = args.rl_n_iter
+    batch_size = args.rl_bs
     for i in range(num_runs):
+        initial_indices = random.sample(all_indices, args.initial_budget)
+
+        logging.info("iteration: %s" % i)
         accs, episode_info = run_episode(args, initial_indices, all_indices, train_dataset, solver, q_net, rlc)
 
         logging.debug("epsode_info: %s"  % episode_info)
@@ -571,17 +624,26 @@ def main(args):
         replay_buffer.insert_episode(episode_info)
 
         if replay_buffer.can_sample(batch_size):
-            episode_sample = replay_buffer.sample(batch_size)
-            if args.cuda:
-                episode_sample.cuda()
+            # print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+            # print(replay_buffer.rb_data)
+            # print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+            episode_sample = replay_buffer.sample(batch_size, args.cuda)
 
             logging.info("Start training...")
             rl_learner.train(episode_sample)
 
-        # eval_interval = 20
-        # if i % eval_interval == 0:
-        #     run_episode(args, initial_indices, all_indices, train_dataset, solver, q_net, rlc)
-        #TODO save RL model here
+        eval_interval = 100
+        if i % eval_interval == 0:
+            logging.info("Evaluation:")
+            run_episode(args, initial_indices, all_indices, train_dataset, solver, q_net, rlc, test_mode=True)
+            logging.info("Evaluation done")
+
+        if (i+1) % 200 == 0:
+            args.epsilon *= args.epsilon_decay_rate
+            
+        if i % 10 == 0:
+            rl_learner.save_models("./models/")
+        # TODO save RL model here
     
 
 

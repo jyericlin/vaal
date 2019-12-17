@@ -9,7 +9,7 @@ from sklearn.metrics import accuracy_score
 import sampler
 
 from tqdm import tqdm
-
+import logging
 
 class ReplayBuffer():
     def __init__(self):
@@ -69,7 +69,9 @@ class Solver:
         else:
             raise Exception("No valid sampling method provideds")
 
-
+    @property
+    def logger(self):
+        return logging.getLogger(Solver.__name__)
 
     def read_data(self, dataloader, labels=True):
         if labels:
@@ -108,9 +110,9 @@ class Solver:
 
             
 
-    def train_RL_without_adv_vae(self, querry_dataloader, task_model, unlabeled_dataloader):
+    # def train_RL_without_adv_vae(self, querry_dataloader, task_model, unlabeled_dataloader):
 
-        final_acc = self.train_without_adv_vae(querry_dataloader, task_model, None, None, unlabeled_dataloader)
+    #     final_acc = self.train_without_adv_vae(querry_dataloader, task_model, None, None, unlabeled_dataloader)
 
 
 
@@ -150,11 +152,11 @@ class Solver:
             optim_task_model.step()
 
             if iter_count % 100 == 0:
-                print('Current task model loss: {:.4f}'.format(task_loss.item()))
+                self.logger.info('Current task model loss: {:.4f}'.format(task_loss.item()))
 
 
         final_accuracy = self.test(task_model)
-        return final_accuracy, vae, discriminator
+        return final_accuracy, vae, discriminator, task_model
     
 
     def train(self, querry_dataloader, task_model, vae, discriminator, unlabeled_dataloader):

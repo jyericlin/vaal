@@ -16,13 +16,32 @@ class TopSampler:
         querry_indices = querry_indices.cpu().numpy()
         self.logger.debug("sample index of curr order: %s" % querry_indices)
         querry_pool_indices = np.asarray(all_indices)[querry_indices]
-        return querry_pool_indices
+        return querry_pool_indices, querry_indices
 
 class UncertaintySampler:
     def __init__(self, budget):
         self.budget = budget
 
-    def sample(self, task_learner, data, cuda):
+    def getOutputProbAllClasses(self, task_learner, data, cuda):
+        all_indices = []
+        all_preds = []
+
+        for images, _, indices in data:
+            if cuda:
+                images = images.cuda()
+
+            with torch.no_grad():
+                out = task_learner(images)
+                preds = out
+            
+            preds = preds.cpu().data
+            all_preds.extend(preds)
+            all_indices.extend(indices)
+
+        all_preds = torch.stack(all_preds)
+        return all_preds, all_indices
+
+    def getOutputProb(self, task_learner, data, cuda):
         all_indices = []
         all_preds = []
 
@@ -40,6 +59,10 @@ class UncertaintySampler:
 
         all_preds = torch.stack(all_preds)
         all_preds = all_preds.view(-1)
+        return all_preds, all_indices
+
+    def sample(self, task_learner, data, cuda):
+        all_preds, all_indices = self.getOutputProb(task_learner, data, cuda)
         all_preds *= -1
 
         _, querry_indices = torch.topk(all_preds, int(self.budget))

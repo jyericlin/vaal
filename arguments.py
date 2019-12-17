@@ -24,6 +24,10 @@ def get_args():
     parser.add_argument('--gamma', type=float, default=0.99, help='gamma for discounting reward')
     parser.add_argument('--grad_norm_clip', type=float, default=10, help='Reduce magnitude of gradients above this L2 norm')
     parser.add_argument('--epsilon', type=float, default=0.3, help='epsilon for exploration in RL')
+    parser.add_argument('--rl_n_iter', type=int, default=10000, help='number of iterations for RL')
+    parser.add_argument('--rl_bs', type=int, default=8, help='batch size for RL training')
+    parser.add_argument('--target_update_interval', type=int, default=40, help='epsisodes to change the target network')
+    parser.add_argument('--epsilon_decay_rate', type=float, default=0.9, help='multiplier to decay epsilon')
     
 
     args = parser.parse_args()
